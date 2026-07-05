@@ -14,6 +14,7 @@ export interface DbUser {
   default_role_id: string | null;
   is_active: boolean;
   last_login_at: string | null;
+  password_hash?: string | null;
 }
 
 @Injectable()
@@ -23,7 +24,7 @@ export class UsersQueries {
   async findById(id: string): Promise<DbUser | null> {
     const { data, error } = await this.supabase.client
       .from('app_users')
-      .select('id, auth_user_id, email, phone, first_name, last_name, display_name, avatar_url, preferred_language_id, default_role_id, is_active, last_login_at')
+      .select('id, auth_user_id, email, phone, first_name, last_name, display_name, avatar_url, preferred_language_id, default_role_id, is_active, last_login_at, password_hash')
       .eq('id', id)
       .eq('is_deleted', false)
       .maybeSingle();
@@ -37,7 +38,7 @@ export class UsersQueries {
   async findByAuthId(authUserId: string): Promise<DbUser | null> {
     const { data, error } = await this.supabase.client
       .from('app_users')
-      .select('id, auth_user_id, email, phone, first_name, last_name, display_name, avatar_url, preferred_language_id, default_role_id, is_active, last_login_at')
+      .select('id, auth_user_id, email, phone, first_name, last_name, display_name, avatar_url, preferred_language_id, default_role_id, is_active, last_login_at, password_hash')
       .eq('auth_user_id', authUserId)
       .eq('is_deleted', false)
       .maybeSingle();
@@ -51,7 +52,7 @@ export class UsersQueries {
   async findByEmail(email: string): Promise<DbUser | null> {
     const { data, error } = await this.supabase.client
       .from('app_users')
-      .select('id, auth_user_id, email, phone, first_name, last_name, display_name, avatar_url, preferred_language_id, default_role_id, is_active, last_login_at')
+      .select('id, auth_user_id, email, phone, first_name, last_name, display_name, avatar_url, preferred_language_id, default_role_id, is_active, last_login_at, password_hash')
       .eq('email', email)
       .eq('is_deleted', false)
       .maybeSingle();
@@ -144,7 +145,7 @@ export class UsersQueries {
     // 2. Get paginated rows
     const { data, error } = await this.supabase.client
       .from('app_users')
-      .select('id, auth_user_id, email, phone, first_name, last_name, display_name, avatar_url, preferred_language_id, default_role_id, is_active, last_login_at')
+      .select('id, auth_user_id, email, phone, first_name, last_name, display_name, avatar_url, preferred_language_id, default_role_id, is_active, last_login_at, password_hash')
       .eq('is_deleted', false)
       .order('created_at', { ascending: false })
       .range(from, to);

@@ -3,6 +3,7 @@ import { UsersQueries, DbUser } from './queries/users.queries';
 import { UpdateUserDto, CreateStaffDto } from './dto/users.dto';
 import { RbacQueries } from '../rbac/queries/rbac.queries';
 import { SupabaseClientService } from '../../database/supabase.client';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class UsersService {
@@ -62,27 +63,14 @@ export class UsersService {
       throw new BadRequestException(`Role ${dto.roleCode} does not exist`);
     }
 
-    // 3. Create auth user in Supabase using admin client
+    // 3. Hash temporary password
     const tempPassword = 'TempPassword123!';
-    const { data: authData, error: authError } = await this.supabase.client.auth.admin.createUser({
-      email: dto.email,
-      password: tempPassword,
-      email_confirm: true,
-    });
+    const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-    if (authError) {
-      throw new BadRequestException(`Failed to create Auth account: ${authError.message}`);
-    }
-
-    const authUserId = authData.user?.id;
-    if (!authUserId) {
-      throw new BadRequestException('Failed to retrieve user ID from auth signup');
-    }
-
-    // 4. Create mirror in app_users
+    // 4. Create user record in database
     try {
       const appUser = await this.usersQueries.createUser({
-        auth_user_id: authUserId,
+        auth_user_id: null,
         email: dto.email,
         phone: dto.phone || null,
         first_name: dto.firstName,
@@ -90,6 +78,7 @@ export class UsersService {
         avatar_url: null,
         preferred_language_id: null,
         default_role_id: role.id,
+        password_hash: passwordHash,
       });
 
       // 5. Link role in user_roles
@@ -97,8 +86,6 @@ export class UsersService {
 
       return appUser;
     } catch (dbError: any) {
-      // Cleanup auth user on database creation failure
-      await this.supabase.client.auth.admin.deleteUser(authUserId);
       throw new BadRequestException(`Failed to create user record: ${dbError.message}`);
     }
   }

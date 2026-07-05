@@ -6,6 +6,7 @@ import { RbacQueries } from '../rbac/queries/rbac.queries';
 import { LookupsQueries } from '../lookups/queries/lookups.queries';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class AuthService {
@@ -40,22 +41,13 @@ export class AuthService {
       throw new BadRequestException('Default customer role not found in database');
     }
 
-    // 3. Register user in Supabase Auth
-    const { data: signUpData, error: signUpError } = await this.supabase.client.auth.signUp({
-      email: dto.email,
-      password: dto.password,
-    });
+    // 3. Hash the password
+    const hashedPassword = await bcrypt.hash(dto.password, 10);
 
-    if (signUpError || !signUpData.user) {
-      throw new BadRequestException(`Auth signup failed: ${signUpError?.message || 'Unknown error'}`);
-    }
-
-    const authUserId = signUpData.user.id;
-
-    // 4. Create mirror user in database
+    // 4. Create user in database with password hash
     try {
       const appUser = await this.usersQueries.createUser({
-        auth_user_id: authUserId,
+        auth_user_id: null,
         email: dto.email,
         phone: dto.phone || null,
         first_name: dto.firstName,
@@ -63,6 +55,7 @@ export class AuthService {
         avatar_url: null,
         preferred_language_id: langId,
         default_role_id: customerRole.id,
+        password_hash: hashedPassword,
       });
 
       // Assign customer role in user_roles
@@ -70,29 +63,21 @@ export class AuthService {
 
       return this.generateTokens(appUser.id, appUser.email, ['customer'], ['orders.read', 'orders.create', 'orders.cancel', 'catalog.read', 'areas.read', 'slots.read']);
     } catch (err: any) {
-      // Clean up Auth account if database mirror fails
-      await this.supabase.client.auth.admin.deleteUser(authUserId);
-      throw new BadRequestException(`Failed to register user mirror: ${err.message}`);
+      throw new BadRequestException(`Failed to register user: ${err.message}`);
     }
   }
 
   async login(dto: LoginDto) {
-    // 1. Sign in with Supabase Auth to check password
-    const { data: signInData, error: signInError } = await this.supabase.client.auth.signInWithPassword({
-      email: dto.email,
-      password: dto.password,
-    });
-
-    if (signInError || !signInData.user) {
+    // 1. Fetch user by email
+    const appUser = await this.usersQueries.findByEmail(dto.email);
+    if (!appUser || !appUser.password_hash) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const authUserId = signInData.user.id;
-
-    // 2. Fetch mirror user
-    const appUser = await this.usersQueries.findByAuthId(authUserId);
-    if (!appUser) {
-      throw new UnauthorizedException('User mirror record not found');
+    // 2. Verify password
+    const isPasswordValid = await bcrypt.compare(dto.password, appUser.password_hash);
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Invalid credentials');
     }
 
     if (!appUser.is_active) {
@@ -107,6 +92,28 @@ export class AuthService {
     const permissions = await this.rbacQueries.findPermissionsForUser(appUser.id);
 
     return this.generateTokens(appUser.id, appUser.email, roles, permissions);
+  }
+
+  async getProfile(userId: string) {
+    const user = await this.usersQueries.findById(userId);
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    const roles = await this.rbacQueries.findRolesForUser(userId);
+    const permissions = await this.rbacQueries.findPermissionsForUser(userId);
+
+    return {
+      id: user.id,
+      email: user.email,
+      phone: user.phone,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      display_name: user.display_name,
+      avatar_url: user.avatar_url,
+      roles,
+      permissions,
+    };
   }
 
   private async generateTokens(userId: string, email: string, roles: string[], permissions: string[]) {

@@ -29,8 +29,7 @@ export class AuthController {
   @ApiOperation({ summary: 'Get details of logged in user' })
   @ApiResponse({ status: 200, description: 'User profile details' })
   async me(@Req() req: any) {
-    // req.user is attached by AuthGuard
-    return req.user;
+    return this.authService.getProfile(req.user.id);
   }
 
   @Post('logout')
