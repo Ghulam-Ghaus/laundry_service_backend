@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsEmail, IsNotEmpty, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
 
 export class AddressDto {
@@ -118,6 +118,61 @@ export class CreateOrderDto {
   @IsBoolean()
   @IsNotEmpty()
   acceptedTerms!: boolean;
+}
+
+export class CreateDraftOrderDto {
+  @Transform(({ value, obj }) => obj.customer_name ?? value)
+  @IsString()
+  @IsNotEmpty()
+  customerName!: string;
+
+  @Transform(({ value, obj }) => obj.phone ?? value)
+  @IsString()
+  @IsNotEmpty()
+  phone!: string;
+
+  @Transform(({ value, obj }) => obj.order_date ?? value)
+  @IsString()
+  @IsNotEmpty()
+  orderDate!: string;
+
+  @Transform(({ value, obj }) => obj.delivery_date ?? value)
+  @IsString()
+  @IsNotEmpty()
+  deliveryDate!: string;
+
+  @Transform(({ value, obj }) => obj.category_id ?? value)
+  @IsString()
+  @IsNotEmpty()
+  categoryId!: string;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OrderItemInputDto)
+  @IsOptional()
+  items?: OrderItemInputDto[];
+
+  @IsString()
+  @IsOptional()
+  couponCode?: string;
+
+  @IsString()
+  @IsOptional()
+  notes?: string;
+
+  @IsString()
+  @IsOptional()
+  specialInstructions?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  discountAmount?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  grandTotal?: number;
 }
 
 export class OrderQuoteDto {

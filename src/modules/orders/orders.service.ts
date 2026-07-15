@@ -3,7 +3,7 @@ import { OrdersQueries, DbOrder, DbOrderItem } from './queries/orders.queries';
 import { CatalogQueries } from '../catalog/queries/catalog.queries';
 import { LookupsQueries } from '../lookups/queries/lookups.queries';
 import { UsersQueries } from '../users/queries/users.queries';
-import { CreateOrderDto, OrderQuoteDto, UpdateOrderStatusDto, AssignStaffDto } from './dto/orders.dto';
+import { CreateOrderDto, CreateDraftOrderDto, OrderQuoteDto, UpdateOrderStatusDto, AssignStaffDto } from './dto/orders.dto';
 
 @Injectable()
 export class OrdersService {
@@ -170,6 +170,7 @@ export class OrdersService {
       currency_code: quote.currencyCode,
       special_instructions: dto.specialInstructions || null,
       is_item_selection_skipped: dto.isItemSelectionSkipped,
+      metadata: {},
     });
 
     // 7. Save order items
@@ -212,6 +213,124 @@ export class OrdersService {
       status: {
         code: initialStatus.code,
         label: initialStatus.label,
+      },
+      totals: {
+        subtotal: order.subtotal.toFixed(2),
+        serviceFee: order.service_fee.toFixed(2),
+        discountTotal: order.discount_total.toFixed(2),
+        grandTotal: order.grand_total.toFixed(2),
+        currencyCode: order.currency_code,
+      },
+    };
+  }
+
+  async createDraftOrder(dto: CreateDraftOrderDto) {
+    const orderDate = new Date(dto.orderDate);
+    const deliveryDate = new Date(dto.deliveryDate);
+
+    if (Number.isNaN(orderDate.getTime()) || Number.isNaN(deliveryDate.getTime())) {
+      throw new BadRequestException('Invalid order_date or delivery_date format');
+    }
+    if (deliveryDate < orderDate) {
+      throw new BadRequestException('delivery_date must be the same day or after order_date');
+    }
+
+    const draftStatus = await this.lookupsQueries.findValueByCode('order_status', 'draft');
+    if (!draftStatus) {
+      throw new BadRequestException('Draft order status is not configured');
+    }
+
+    // 1. Calculate totals
+    const quote = await this.calculateQuote({
+      items: dto.items,
+      couponCode: dto.couponCode,
+      isItemSelectionSkipped: !dto.items || dto.items.length === 0,
+    });
+
+    const subtotal = quote.subtotal;
+    const serviceFee = quote.serviceFee;
+    
+    // Parse custom overrides if provided, fallback to calculated totals
+    const discountTotal = (dto.discountAmount !== undefined && dto.discountAmount !== null && !Number.isNaN(Number(dto.discountAmount)))
+      ? Number(dto.discountAmount)
+      : quote.discountTotal;
+
+    const grandTotal = (dto.grandTotal !== undefined && dto.grandTotal !== null && !Number.isNaN(Number(dto.grandTotal)))
+      ? Number(dto.grandTotal)
+      : Math.max(0, subtotal - discountTotal) + serviceFee;
+
+    const currentYear = new Date().getFullYear();
+    const sequenceCount = await this.ordersQueries.getOrdersCountForYear(currentYear);
+    const orderNumber = `ADC-${currentYear}-${(sequenceCount + 1).toString().padStart(6, '0')}`;
+
+    const order = await this.ordersQueries.createOrder({
+      order_number: orderNumber,
+      customer_id: null,
+      customer_address_id: null,
+      status_id: draftStatus.id,
+      frequency_id: null,
+      pickup_date: dto.orderDate,
+      pickup_slot_id: null,
+      delivery_date: dto.deliveryDate,
+      delivery_slot_id: null,
+      subtotal: subtotal,
+      service_fee: serviceFee,
+      discount_total: discountTotal,
+      grand_total: grandTotal,
+      currency_code: 'PKR',
+      special_instructions: dto.notes || dto.specialInstructions || null,
+      is_item_selection_skipped: !dto.items || dto.items.length === 0,
+      metadata: {
+        customer_name: dto.customerName,
+        phone: dto.phone,
+        category_id: dto.categoryId,
+        discount_amount: discountTotal,
+        notes: dto.notes || dto.specialInstructions || null,
+      },
+    });
+
+    // 2. Save order items
+    if (quote.items && quote.items.length > 0) {
+      const itemsToInsert = quote.items.map((i: any) => ({
+        order_id: order.id,
+        item_id: i.itemId,
+        service_option_id: i.serviceOptionId,
+        status_id: null,
+        item_name_snapshot: i.itemNameSnapshot,
+        service_name_snapshot: i.serviceNameSnapshot,
+        quantity: i.quantity,
+        unit_price: i.unitPrice,
+        line_total: i.lineTotal,
+      }));
+      await this.ordersQueries.createOrderItems(itemsToInsert);
+    }
+
+    await this.ordersQueries.createStatusHistory({
+      order_id: order.id,
+      from_status_id: null,
+      to_status_id: draftStatus.id,
+      changed_by: null,
+      note: 'Draft order created',
+    });
+
+    await this.ordersQueries.createAuditLog({
+      actorUserId: null,
+      action: 'ORDER_DRAFT_CREATED',
+      entityName: 'orders',
+      entityId: order.id,
+      newValues: {
+        order_number: order.order_number,
+        metadata: order.metadata,
+        status: draftStatus.code,
+      },
+    });
+
+    return {
+      orderId: order.id,
+      orderNumber: order.order_number,
+      status: {
+        code: draftStatus.code,
+        label: draftStatus.label,
       },
       totals: {
         subtotal: order.subtotal.toFixed(2),

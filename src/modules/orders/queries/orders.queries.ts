@@ -31,6 +31,7 @@ export interface DbOrder {
   currency_code: string;
   special_instructions: string | null;
   is_item_selection_skipped: boolean;
+  metadata: any;
   created_at: string;
 }
 
@@ -231,6 +232,7 @@ export class OrdersQueries {
       .from('orders')
       .select(`
         id, order_number, subtotal, service_fee, discount_total, grand_total, currency_code, created_at,
+        pickup_date, delivery_date, metadata,
         status:lookup_values!status_id(id, code, label),
         customer:app_users!customer_id(id, first_name, last_name, email)
       `)

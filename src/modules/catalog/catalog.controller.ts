@@ -26,6 +26,13 @@ export class CatalogController {
   }
 
   @Public()
+  @Get('service-categories')
+  @ApiOperation({ summary: 'Get all active service categories (alias)' })
+  async getServiceCategories() {
+    return this.catalogService.getCategories(false);
+  }
+
+  @Public()
   @Get('categories/:id/items')
   @ApiOperation({ summary: 'Get active items by category ID' })
   async getCategoryItems(@Param('id') id: string) {

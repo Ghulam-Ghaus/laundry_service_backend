@@ -5,7 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { OrdersService } from './orders.service';
 import { Public } from '../../common/decorators/public.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
-import { CreateOrderDto, OrderQuoteDto, UpdateOrderStatusDto, AssignStaffDto } from './dto/orders.dto';
+import { CreateOrderDto, CreateDraftOrderDto, OrderQuoteDto, UpdateOrderStatusDto, AssignStaffDto } from './dto/orders.dto';
 
 @ApiTags('Public Orders')
 @Controller('orders')
@@ -21,6 +21,13 @@ export class OrdersController {
   @ApiOperation({ summary: 'Get a pricing estimate / quote' })
   async getQuote(@Body() dto: OrderQuoteDto) {
     return this.ordersService.calculateQuote(dto);
+  }
+
+  @Public()
+  @Post('draft')
+  @ApiOperation({ summary: 'Create a draft order / receipt' })
+  async createDraftOrder(@Body() dto: CreateDraftOrderDto) {
+    return this.ordersService.createDraftOrder(dto);
   }
 
   @Public()
