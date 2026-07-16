@@ -5,7 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { OrdersService } from './orders.service';
 import { Public } from '../../common/decorators/public.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
-import { CreateOrderDto, CreateDraftOrderDto, OrderQuoteDto, UpdateOrderStatusDto, AssignStaffDto } from './dto/orders.dto';
+import { CreateOrderDto, CreateDraftOrderDto, OrderQuoteDto, UpdateOrderStatusDto, AssignStaffDto, ReleaseOrderDto } from './dto/orders.dto';
 
 @ApiTags('Public Orders')
 @Controller('orders')
@@ -98,6 +98,30 @@ export class OrdersController {
 export class AdminOrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
+  @Get('pos')
+  @RequirePermissions('orders.read')
+  @ApiOperation({ summary: 'Get POS orders list (Admin)' })
+  async getPosOrders(
+    @Query('page') page: string = '1',
+    @Query('limit') limit: string = '20',
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.ordersService.getOrdersByType('pos', parseInt(page, 10), parseInt(limit, 10), search, status);
+  }
+
+  @Get('pickup')
+  @RequirePermissions('orders.read')
+  @ApiOperation({ summary: 'Get Pickup orders list (Admin)' })
+  async getPickupOrders(
+    @Query('page') page: string = '1',
+    @Query('limit') limit: string = '20',
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.ordersService.getOrdersByType('pickup', parseInt(page, 10), parseInt(limit, 10), search, status);
+  }
+
   @Get()
   @RequirePermissions('orders.read')
   @ApiOperation({ summary: 'Get all orders list (Admin)' })
@@ -122,6 +146,14 @@ export class AdminOrdersController {
   async updateStatus(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateOrderStatusDto) {
     const actorUserId = req.user.id;
     return this.ordersService.updateStatus(id, dto, actorUserId);
+  }
+
+  @Patch(':id/release')
+  @RequirePermissions('orders.update')
+  @ApiOperation({ summary: 'Release / Deliver items and record payment (POS)' })
+  async releaseOrder(@Req() req: any, @Param('id') id: string, @Body() dto: ReleaseOrderDto) {
+    const actorUserId = req.user.id;
+    return this.ordersService.releaseOrder(id, dto, actorUserId);
   }
 
   @Delete(':id')

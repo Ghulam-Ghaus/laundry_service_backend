@@ -1,5 +1,5 @@
 import { Transform, Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsEmail, IsNotEmpty, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsNotEmpty, IsNumber, IsOptional, IsString, ValidateNested, IsInt, Min } from 'class-validator';
 
 export class AddressDto {
   @IsString()
@@ -209,4 +209,34 @@ export class AssignStaffDto {
   @IsString()
   @IsNotEmpty()
   taskTypeCode!: string; // 'pickup', 'delivery', etc.
+}
+
+export class ReleaseItemDto {
+  @IsString()
+  @IsNotEmpty()
+  itemId!: string;
+
+  @IsInt()
+  @Min(0)
+  quantityDeliveredNow!: number;
+}
+
+export class ReleaseOrderDto {
+  @IsBoolean()
+  @IsNotEmpty()
+  isFullRelease!: boolean;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ReleaseItemDto)
+  @IsOptional()
+  items?: ReleaseItemDto[];
+
+  @IsNumber()
+  @Min(0)
+  paymentAmountCollectedNow!: number;
+
+  @IsString()
+  @IsOptional()
+  paymentMethodCode?: string; // e.g. 'cash', 'card', etc.
 }

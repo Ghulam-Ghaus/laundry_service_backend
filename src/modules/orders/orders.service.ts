@@ -4,7 +4,7 @@ import { CatalogQueries } from '../catalog/queries/catalog.queries';
 import { LookupsQueries } from '../lookups/queries/lookups.queries';
 import { UsersQueries } from '../users/queries/users.queries';
 import { UsersService } from '../users/users.service';
-import { CreateOrderDto, CreateDraftOrderDto, OrderQuoteDto, UpdateOrderStatusDto, AssignStaffDto } from './dto/orders.dto';
+import { CreateOrderDto, CreateDraftOrderDto, OrderQuoteDto, UpdateOrderStatusDto, AssignStaffDto, ReleaseOrderDto } from './dto/orders.dto';
 
 @Injectable()
 export class OrdersService {
@@ -172,7 +172,9 @@ export class OrdersService {
       currency_code: quote.currencyCode,
       special_instructions: dto.specialInstructions || null,
       is_item_selection_skipped: dto.isItemSelectionSkipped,
-      order_type: 'online',
+      order_type: 'pickup',
+      payment_status: 'unpaid',
+      amount_paid: 0,
       metadata: {},
     });
 
@@ -188,6 +190,7 @@ export class OrdersService {
         quantity: i.quantity,
         unit_price: i.unitPrice,
         line_total: i.lineTotal,
+        quantity_delivered: 0,
       }));
       await this.ordersQueries.createOrderItems(itemsToInsert);
     }
@@ -293,6 +296,8 @@ export class OrdersService {
       special_instructions: dto.notes || dto.specialInstructions || null,
       is_item_selection_skipped: !dto.items || dto.items.length === 0,
       order_type: 'pos',
+      payment_status: 'unpaid',
+      amount_paid: 0,
       metadata: {
         customer_name: dto.customerName,
         phone: dto.phone,
@@ -314,6 +319,7 @@ export class OrdersService {
         quantity: i.quantity,
         unit_price: i.unitPrice,
         line_total: i.lineTotal,
+        quantity_delivered: 0,
       }));
       await this.ordersQueries.createOrderItems(itemsToInsert);
     }
@@ -466,5 +472,117 @@ export class OrdersService {
     } catch {
       return defaultSettings;
     }
+  }
+
+  async getOrdersByType(type: 'pos' | 'pickup', page: number, limit: number, search?: string, status?: string) {
+    const result = await this.ordersQueries.findOrdersByType(type, page, limit, search, status);
+    return {
+      items: result.items,
+      pagination: {
+        page,
+        limit,
+        total: result.total,
+        totalPages: Math.ceil(result.total / limit),
+      },
+    };
+  }
+
+  async releaseOrder(orderId: string, dto: ReleaseOrderDto, actorUserId: string) {
+    const order = await this.getOrderById(orderId);
+    
+    // 1. Determine new quantities and calculate whether it is fully delivered
+    let totalItemsQuantity = 0;
+    let totalItemsDelivered = 0;
+    
+    if (dto.isFullRelease) {
+      // Deliver all remaining quantities of all items
+      for (const item of order.items) {
+        await this.ordersQueries.updateOrderItemDelivery(item.id, item.quantity);
+      }
+      totalItemsQuantity = order.items.reduce((sum: number, i: any) => sum + i.quantity, 0);
+      totalItemsDelivered = totalItemsQuantity;
+    } else if (dto.items && dto.items.length > 0) {
+      // Update individual items
+      for (const releaseItem of dto.items) {
+        const orderItem = order.items.find((i: any) => i.id === releaseItem.itemId);
+        if (!orderItem) {
+          throw new BadRequestException(`Item ${releaseItem.itemId} is not part of this order`);
+        }
+        
+        const newDeliveredQty = Math.min(orderItem.quantity, orderItem.quantity_delivered + releaseItem.quantityDeliveredNow);
+        await this.ordersQueries.updateOrderItemDelivery(releaseItem.itemId, newDeliveredQty);
+      }
+      
+      // Fetch fresh order details to compute totals
+      const freshOrder = await this.getOrderById(orderId);
+      totalItemsQuantity = freshOrder.items.reduce((sum: number, i: any) => sum + i.quantity, 0);
+      totalItemsDelivered = freshOrder.items.reduce((sum: number, i: any) => sum + i.quantity_delivered, 0);
+    }
+    
+    // 2. Handle payment update
+    const newAmountPaid = Math.min(order.grand_total, order.amount_paid + dto.paymentAmountCollectedNow);
+    let newPaymentStatus = 'unpaid';
+    if (newAmountPaid >= order.grand_total) {
+      newPaymentStatus = 'paid';
+    } else if (newAmountPaid > 0) {
+      newPaymentStatus = 'partial_paid';
+    }
+    
+    await this.ordersQueries.updateOrderPayment(orderId, newPaymentStatus, newAmountPaid);
+    
+    // 3. Record payment transaction in payments table (if amount collected > 0)
+    if (dto.paymentAmountCollectedNow > 0) {
+      const methodCode = dto.paymentMethodCode || 'cash';
+      const methodLookup = await this.lookupsQueries.findValueByCode('payment_method', methodCode);
+      const paymentStatusLookup = await this.lookupsQueries.findValueByCode('payment_status', 'paid');
+      
+      if (methodLookup && paymentStatusLookup) {
+        await this.ordersQueries.createPayment({
+          orderId,
+          paymentMethodId: methodLookup.id,
+          paymentStatusId: paymentStatusLookup.id,
+          amount: dto.paymentAmountCollectedNow,
+          currencyCode: 'PKR',
+          paidAt: new Date().toISOString(),
+          createdBy: actorUserId,
+        });
+      }
+    }
+    
+    // 4. Update order status if fully delivered
+    if (totalItemsDelivered >= totalItemsQuantity) {
+      const deliveredStatus = await this.lookupsQueries.findValueByCode('order_status', 'delivered');
+      if (deliveredStatus) {
+        await this.ordersQueries.updateOrderStatus(orderId, deliveredStatus.id);
+        
+        await this.ordersQueries.createStatusHistory({
+          order_id: orderId,
+          from_status_id: order.status_id,
+          to_status_id: deliveredStatus.id,
+          note: 'All items collected. POS order released.',
+          changed_by: actorUserId,
+        });
+      }
+    } else {
+      const readyStatus = await this.lookupsQueries.findValueByCode('order_status', 'ready_for_delivery');
+      if (readyStatus && order.status_id !== readyStatus.id) {
+        await this.ordersQueries.updateOrderStatus(orderId, readyStatus.id);
+      }
+      
+      await this.ordersQueries.createStatusHistory({
+        order_id: orderId,
+        from_status_id: order.status_id,
+        to_status_id: order.status_id,
+        note: 'Partial items collected. POS order partially released.',
+        changed_by: actorUserId,
+      });
+    }
+    
+    return {
+      message: 'Order release updated successfully',
+      paymentStatus: newPaymentStatus,
+      amountPaid: newAmountPaid,
+      isFullyDelivered: totalItemsDelivered >= totalItemsQuantity,
+    };
   }
 }

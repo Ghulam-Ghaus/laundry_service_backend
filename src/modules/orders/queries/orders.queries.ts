@@ -32,6 +32,8 @@ export interface DbOrder {
   special_instructions: string | null;
   is_item_selection_skipped: boolean;
   order_type: string;
+  payment_status: string;
+  amount_paid: number;
   metadata: any;
   created_at: string;
 }
@@ -47,6 +49,7 @@ export interface DbOrderItem {
   quantity: number;
   unit_price: number;
   line_total: number;
+  quantity_delivered: number;
 }
 
 export interface DbOrderStatusHistory {
@@ -188,6 +191,7 @@ export class OrdersQueries {
       service_fee: parseFloat(row.service_fee),
       discount_total: parseFloat(row.discount_total),
       grand_total: parseFloat(row.grand_total),
+      amount_paid: parseFloat(row.amount_paid),
       items: (row.items || []).map((item: any) => ({
         ...item,
         unit_price: parseFloat(item.unit_price),
@@ -200,7 +204,7 @@ export class OrdersQueries {
     const { data, error } = await this.supabase.client
       .from('orders')
       .select(`
-        id, order_number, subtotal, service_fee, discount_total, grand_total, currency_code, created_at, order_type,
+        id, order_number, subtotal, service_fee, discount_total, grand_total, currency_code, created_at, order_type, payment_status, amount_paid,
         status:lookup_values!status_id(code, label)
       `)
       .eq('customer_id', customerId)
@@ -217,6 +221,7 @@ export class OrdersQueries {
       service_fee: parseFloat(row.service_fee),
       discount_total: parseFloat(row.discount_total),
       grand_total: parseFloat(row.grand_total),
+      amount_paid: parseFloat(row.amount_paid),
     }));
   }
 
@@ -233,7 +238,7 @@ export class OrdersQueries {
       .from('orders')
       .select(`
         id, order_number, customer_id, subtotal, service_fee, discount_total, grand_total, currency_code, created_at,
-        pickup_date, delivery_date, order_type, metadata,
+        pickup_date, delivery_date, order_type, payment_status, amount_paid, metadata,
         status:lookup_values!status_id(id, code, label),
         customer:app_users!customer_id(id, first_name, last_name, email)
       `)
@@ -400,5 +405,127 @@ export class OrdersQueries {
       throw new Error(`Failed to fetch system settings: ${error.message}`);
     }
     return data || [];
+  }
+
+  async findOrdersByType(
+    type: 'pos' | 'pickup',
+    page: number,
+    limit: number,
+    search?: string,
+    statusFilter?: string,
+  ): Promise<{ items: any[]; total: number }> {
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+
+    let countQuery = this.supabase.client
+      .from('orders')
+      .select('*', { count: 'exact', head: true })
+      .eq('order_type', type)
+      .eq('is_deleted', false);
+
+    let rowsQuery = this.supabase.client
+      .from('orders')
+      .select(`
+        id, order_number, customer_id, subtotal, service_fee, discount_total, grand_total, currency_code, created_at,
+        pickup_date, delivery_date, order_type, payment_status, amount_paid, metadata,
+        status:lookup_values!status_id(id, code, label),
+        customer:app_users!customer_id(id, first_name, last_name, email, phone)
+      `)
+      .eq('order_type', type)
+      .eq('is_deleted', false);
+
+    if (statusFilter) {
+      const statusVal = await this.supabase.client
+        .from('lookup_values')
+        .select('id')
+        .eq('code', statusFilter)
+        .maybeSingle();
+
+      if (statusVal.data) {
+        countQuery = countQuery.eq('status_id', statusVal.data.id);
+        rowsQuery = rowsQuery.eq('status_id', statusVal.data.id);
+      }
+    }
+
+    if (search) {
+      const searchPattern = `%${search}%`;
+      const orFilter = `order_number.ilike.${searchPattern},metadata->>customer_name.ilike.${searchPattern},metadata->>phone.ilike.${searchPattern}`;
+      
+      countQuery = countQuery.or(orFilter);
+      rowsQuery = rowsQuery.or(orFilter);
+    }
+
+    const { count, error: countError } = await countQuery;
+    if (countError) {
+      throw new Error(`Failed to count orders: ${countError.message}`);
+    }
+
+    const { data, error } = await rowsQuery
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (error) {
+      throw new Error(`Failed to fetch orders: ${error.message}`);
+    }
+
+    return {
+      items: (data || []).map((row: any) => ({
+        ...row,
+        subtotal: parseFloat(row.subtotal),
+        service_fee: parseFloat(row.service_fee),
+        discount_total: parseFloat(row.discount_total),
+        grand_total: parseFloat(row.grand_total),
+        amount_paid: parseFloat(row.amount_paid),
+      })),
+      total: count || 0,
+    };
+  }
+
+  async updateOrderItemDelivery(itemId: string, qtyDelivered: number): Promise<void> {
+    const { error } = await this.supabase.client
+      .from('order_items')
+      .update({ quantity_delivered: qtyDelivered })
+      .eq('id', itemId);
+
+    if (error) {
+      throw new Error(`Failed to update item delivery quantity: ${error.message}`);
+    }
+  }
+
+  async updateOrderPayment(orderId: string, status: string, amount: number): Promise<void> {
+    const { error } = await this.supabase.client
+      .from('orders')
+      .update({ payment_status: status, amount_paid: amount })
+      .eq('id', orderId);
+
+    if (error) {
+      throw new Error(`Failed to update order payment: ${error.message}`);
+    }
+  }
+
+  async createPayment(payload: {
+    orderId: string;
+    paymentMethodId: string;
+    paymentStatusId: string;
+    amount: number;
+    currencyCode: string;
+    paidAt?: string;
+    createdBy?: string;
+  }): Promise<void> {
+    const { error } = await this.supabase.client
+      .from('payments')
+      .insert([{
+        order_id: payload.orderId,
+        payment_method_id: payload.paymentMethodId,
+        payment_status_id: payload.paymentStatusId,
+        amount: payload.amount,
+        currency_code: payload.currencyCode,
+        paid_at: payload.paidAt || null,
+        created_by: payload.createdBy || null,
+      }]);
+
+    if (error) {
+      throw new Error(`Failed to insert payment record: ${error.message}`);
+    }
   }
 }
