@@ -31,6 +31,7 @@ export interface DbServiceOption {
   code: string;
   name: string;
   description: string | null;
+  sort_order: number;
   is_active: boolean;
 }
 
@@ -312,9 +313,9 @@ export class CatalogQueries {
   async findServiceOptions(): Promise<DbServiceOption[]> {
     const { data, error } = await this.supabase.client
       .from('service_options')
-      .select('id, code, name, description, is_active')
+      .select('id, code, name, description, sort_order, is_active')
       .eq('is_deleted', false)
-      .order('name', { ascending: true });
+      .order('sort_order', { ascending: true });
 
     if (error) {
       throw new Error(`Failed to fetch service options: ${error.message}`);
@@ -325,7 +326,7 @@ export class CatalogQueries {
   async findServiceOptionById(id: string): Promise<DbServiceOption | null> {
     const { data, error } = await this.supabase.client
       .from('service_options')
-      .select('id, code, name, description, is_active')
+      .select('id, code, name, description, sort_order, is_active')
       .eq('id', id)
       .eq('is_deleted', false)
       .maybeSingle();
@@ -336,11 +337,12 @@ export class CatalogQueries {
     return data;
   }
 
-  async createServiceOption(payload: { code: string; name: string; description?: string }): Promise<DbServiceOption> {
+  async createServiceOption(payload: { code: string; name: string; description?: string; sortOrder?: number }): Promise<DbServiceOption> {
     const dataToInsert = {
       code: payload.code,
       name: payload.name,
       description: payload.description || null,
+      sort_order: payload.sortOrder || 0,
     };
 
     const { data, error } = await this.supabase.client
@@ -355,10 +357,11 @@ export class CatalogQueries {
     return data;
   }
 
-  async updateServiceOption(id: string, updates: { name?: string; description?: string; isActive?: boolean }): Promise<DbServiceOption> {
+  async updateServiceOption(id: string, updates: { name?: string; description?: string; sortOrder?: number; isActive?: boolean }): Promise<DbServiceOption> {
     const dataToUpdate: any = {};
     if (updates.name !== undefined) dataToUpdate.name = updates.name;
     if (updates.description !== undefined) dataToUpdate.description = updates.description;
+    if (updates.sortOrder !== undefined) dataToUpdate.sort_order = updates.sortOrder;
     if (updates.isActive !== undefined) dataToUpdate.is_active = updates.isActive;
 
     const { data, error } = await this.supabase.client

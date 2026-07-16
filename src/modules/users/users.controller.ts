@@ -31,6 +31,13 @@ export class UsersController {
 export class AdminUsersController {
   constructor(private readonly usersService: UsersService) {}
 
+  @Get('by-phone/:phone')
+  @ApiOperation({ summary: 'Find user by phone number (Admin)' })
+  @ApiResponse({ status: 200, description: 'User profile if found, or null' })
+  async getUserByPhone(@Param('phone') phone: string) {
+    return this.usersService.getUserByPhone(phone);
+  }
+
   @Get()
   @ApiOperation({ summary: 'Get all users paginated (Admin)' })
   @ApiResponse({ status: 200, description: 'Paginated user list' })

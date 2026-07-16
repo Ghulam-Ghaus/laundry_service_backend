@@ -140,6 +140,10 @@ export class CreateServiceOptionDto {
   @IsString()
   @IsOptional()
   description?: string;
+
+  @IsNumber()
+  @IsOptional()
+  sortOrder?: number;
 }
 
 export class UpdateServiceOptionDto {
@@ -150,6 +154,10 @@ export class UpdateServiceOptionDto {
   @IsString()
   @IsOptional()
   description?: string;
+
+  @IsNumber()
+  @IsOptional()
+  sortOrder?: number;
 
   @IsBoolean()
   @IsOptional()

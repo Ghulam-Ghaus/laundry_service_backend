@@ -3,6 +3,7 @@ import { OrdersQueries, DbOrder, DbOrderItem } from './queries/orders.queries';
 import { CatalogQueries } from '../catalog/queries/catalog.queries';
 import { LookupsQueries } from '../lookups/queries/lookups.queries';
 import { UsersQueries } from '../users/queries/users.queries';
+import { UsersService } from '../users/users.service';
 import { CreateOrderDto, CreateDraftOrderDto, OrderQuoteDto, UpdateOrderStatusDto, AssignStaffDto } from './dto/orders.dto';
 
 @Injectable()
@@ -12,6 +13,7 @@ export class OrdersService {
     private readonly catalogQueries: CatalogQueries,
     private readonly lookupsQueries: LookupsQueries,
     private readonly usersQueries: UsersQueries,
+    private readonly usersService: UsersService,
   ) {}
 
   // --- Quote Calculations ---
@@ -170,6 +172,7 @@ export class OrdersService {
       currency_code: quote.currencyCode,
       special_instructions: dto.specialInstructions || null,
       is_item_selection_skipped: dto.isItemSelectionSkipped,
+      order_type: 'online',
       metadata: {},
     });
 
@@ -225,19 +228,28 @@ export class OrdersService {
   }
 
   async createDraftOrder(dto: CreateDraftOrderDto) {
-    const orderDate = new Date(dto.orderDate);
-    const deliveryDate = new Date(dto.deliveryDate);
+    const orderDate = dto.orderDate ? new Date(dto.orderDate) : new Date();
+    const deliveryDate = dto.deliveryDate ? new Date(dto.deliveryDate) : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
 
     if (Number.isNaN(orderDate.getTime()) || Number.isNaN(deliveryDate.getTime())) {
-      throw new BadRequestException('Invalid order_date or delivery_date format');
+      throw new BadRequestException('Invalid orderDate or deliveryDate format');
     }
     if (deliveryDate < orderDate) {
-      throw new BadRequestException('delivery_date must be the same day or after order_date');
+      throw new BadRequestException('deliveryDate must be the same day or after orderDate');
     }
 
     const draftStatus = await this.lookupsQueries.findValueByCode('order_status', 'draft');
     if (!draftStatus) {
       throw new BadRequestException('Draft order status is not configured');
+    }
+
+    // Lookup or create customer account by phone & name
+    let customerId: string | null = null;
+    try {
+      const customer = await this.usersService.getOrCreateCustomer(dto.customerName, dto.phone);
+      customerId = customer.id;
+    } catch (err: any) {
+      throw new BadRequestException(`Failed to resolve customer: ${err.message}`);
     }
 
     // 1. Calculate totals
@@ -265,13 +277,13 @@ export class OrdersService {
 
     const order = await this.ordersQueries.createOrder({
       order_number: orderNumber,
-      customer_id: null,
+      customer_id: customerId,
       customer_address_id: null,
       status_id: draftStatus.id,
       frequency_id: null,
-      pickup_date: dto.orderDate,
+      pickup_date: orderDate.toISOString().split('T')[0],
       pickup_slot_id: null,
-      delivery_date: dto.deliveryDate,
+      delivery_date: deliveryDate.toISOString().split('T')[0],
       delivery_slot_id: null,
       subtotal: subtotal,
       service_fee: serviceFee,
@@ -280,6 +292,7 @@ export class OrdersService {
       currency_code: 'PKR',
       special_instructions: dto.notes || dto.specialInstructions || null,
       is_item_selection_skipped: !dto.items || dto.items.length === 0,
+      order_type: 'pos',
       metadata: {
         customer_name: dto.customerName,
         phone: dto.phone,

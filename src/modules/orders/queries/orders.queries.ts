@@ -31,6 +31,7 @@ export interface DbOrder {
   currency_code: string;
   special_instructions: string | null;
   is_item_selection_skipped: boolean;
+  order_type: string;
   metadata: any;
   created_at: string;
 }
@@ -199,7 +200,7 @@ export class OrdersQueries {
     const { data, error } = await this.supabase.client
       .from('orders')
       .select(`
-        id, order_number, subtotal, service_fee, discount_total, grand_total, currency_code, created_at,
+        id, order_number, subtotal, service_fee, discount_total, grand_total, currency_code, created_at, order_type,
         status:lookup_values!status_id(code, label)
       `)
       .eq('customer_id', customerId)
@@ -231,8 +232,8 @@ export class OrdersQueries {
     let rowsQuery = this.supabase.client
       .from('orders')
       .select(`
-        id, order_number, subtotal, service_fee, discount_total, grand_total, currency_code, created_at,
-        pickup_date, delivery_date, metadata,
+        id, order_number, customer_id, subtotal, service_fee, discount_total, grand_total, currency_code, created_at,
+        pickup_date, delivery_date, order_type, metadata,
         status:lookup_values!status_id(id, code, label),
         customer:app_users!customer_id(id, first_name, last_name, email)
       `)

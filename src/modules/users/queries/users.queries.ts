@@ -159,4 +159,18 @@ export class UsersQueries {
       total: count || 0,
     };
   }
+
+  async findByPhone(phone: string): Promise<DbUser | null> {
+    const { data, error } = await this.supabase.client
+      .from('app_users')
+      .select('id, auth_user_id, email, phone, first_name, last_name, display_name, avatar_url, preferred_language_id, default_role_id, is_active, last_login_at, password_hash')
+      .eq('phone', phone)
+      .eq('is_deleted', false)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`Failed to find user by phone: ${error.message}`);
+    }
+    return data;
+  }
 }
