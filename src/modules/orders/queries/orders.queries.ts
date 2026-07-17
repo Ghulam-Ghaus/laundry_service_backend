@@ -240,7 +240,8 @@ export class OrdersQueries {
         id, order_number, customer_id, subtotal, service_fee, discount_total, grand_total, currency_code, created_at,
         pickup_date, delivery_date, order_type, payment_status, amount_paid, metadata,
         status:lookup_values!status_id(id, code, label),
-        customer:app_users!customer_id(id, first_name, last_name, email)
+        customer:app_users!customer_id(id, first_name, last_name, email),
+        items:order_items(id, quantity, quantity_delivered, item_name_snapshot, service_name_snapshot, unit_price)
       `)
       .eq('is_deleted', false);
 
@@ -270,6 +271,11 @@ export class OrdersQueries {
       service_fee: parseFloat(row.service_fee),
       discount_total: parseFloat(row.discount_total),
       grand_total: parseFloat(row.grand_total),
+      amount_paid: parseFloat(row.amount_paid || 0),
+      items: (row.items || []).map((item: any) => ({
+        ...item,
+        unit_price: parseFloat(item.unit_price || 0),
+      })),
     }));
 
     return { items, total: count || 0 };
@@ -429,7 +435,8 @@ export class OrdersQueries {
         id, order_number, customer_id, subtotal, service_fee, discount_total, grand_total, currency_code, created_at,
         pickup_date, delivery_date, order_type, payment_status, amount_paid, metadata,
         status:lookup_values!status_id(id, code, label),
-        customer:app_users!customer_id(id, first_name, last_name, email, phone)
+        customer:app_users!customer_id(id, first_name, last_name, email, phone),
+        items:order_items(id, quantity, quantity_delivered, item_name_snapshot, service_name_snapshot, unit_price)
       `)
       .eq('order_type', type)
       .eq('is_deleted', false);
@@ -476,6 +483,10 @@ export class OrdersQueries {
         discount_total: parseFloat(row.discount_total),
         grand_total: parseFloat(row.grand_total),
         amount_paid: parseFloat(row.amount_paid),
+        items: (row.items || []).map((item: any) => ({
+          ...item,
+          unit_price: parseFloat(item.unit_price || 0),
+        })),
       })),
       total: count || 0,
     };
@@ -527,5 +538,74 @@ export class OrdersQueries {
     if (error) {
       throw new Error(`Failed to insert payment record: ${error.message}`);
     }
+  }
+
+  /**
+   * Returns today's KPI stats for the admin dashboard.
+   * Two metrics per order type (pos / pickup):
+   *   - received:  orders whose created_at falls on today
+   *   - delivered: orders whose delivery_date falls on today AND status is delivered/completed
+   *   - collected: sum of amount_paid for delivered orders above
+   */
+  async findTodayStats(): Promise<{
+    pos: { receivedCount: number; deliveredCount: number; collectedAmount: number };
+    pickup: { receivedCount: number; deliveredCount: number; collectedAmount: number };
+  }> {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString();
+
+    // Fetch today-received (created_at = today) for both types in one query
+    const { data: received, error: receivedError } = await this.supabase.client
+      .from('orders')
+      .select('id, order_type')
+      .eq('is_deleted', false)
+      .gte('created_at', startOfToday)
+      .lte('created_at', endOfToday);
+
+    if (receivedError) throw new Error(`Failed to fetch today received: ${receivedError.message}`);
+
+    // Fetch today-delivered (delivery_date = today AND status = delivered/completed)
+    const { data: deliveredStatusRows, error: statusError } = await this.supabase.client
+      .from('lookup_values')
+      .select('id')
+      .in('code', ['delivered', 'completed']);
+
+    if (statusError) throw new Error(`Failed to fetch status IDs: ${statusError.message}`);
+
+    const deliveredStatusIds = (deliveredStatusRows || []).map((r: any) => r.id);
+
+    const { data: delivered, error: deliveredError } = await this.supabase.client
+      .from('orders')
+      .select('id, order_type, amount_paid, delivery_date')
+      .eq('is_deleted', false)
+      .in('status_id', deliveredStatusIds)
+      .gte('delivery_date', startOfToday.slice(0, 10))   // date-only comparison
+      .lte('delivery_date', endOfToday.slice(0, 10));
+
+    if (deliveredError) throw new Error(`Failed to fetch today delivered: ${deliveredError.message}`);
+
+    const stats = {
+      pos:    { receivedCount: 0, deliveredCount: 0, collectedAmount: 0 },
+      pickup: { receivedCount: 0, deliveredCount: 0, collectedAmount: 0 },
+    };
+
+    (received || []).forEach((r: any) => {
+      if (r.order_type === 'pos') stats.pos.receivedCount++;
+      else if (r.order_type === 'pickup') stats.pickup.receivedCount++;
+    });
+
+    (delivered || []).forEach((r: any) => {
+      const amt = parseFloat(r.amount_paid || 0);
+      if (r.order_type === 'pos') {
+        stats.pos.deliveredCount++;
+        stats.pos.collectedAmount += amt;
+      } else if (r.order_type === 'pickup') {
+        stats.pickup.deliveredCount++;
+        stats.pickup.collectedAmount += amt;
+      }
+    });
+
+    return stats;
   }
 }
